@@ -2,9 +2,6 @@ name: Build Release
 
 on:
   push:
-    # branches:
-    #   - 'master'
-    #   - 'build'
     tags:
       - v*
 
@@ -32,7 +29,19 @@ jobs:
             flutter_channel: 'stable'
             artifact_name: release-ios
             artifact_path: build/ios/ipa/*.ipa
-    
+          - target: windows
+            os: windows-latest
+            flutter_version: '3.16'
+            flutter_channel: 'stable'
+            artifact_name: release-windows
+            artifact_path: build/windows/*.exe
+          - target: web
+            os: ubuntu-latest
+            flutter_version: '3.16'
+            flutter_channel: 'stable'
+            artifact_name: release-web
+            artifact_path: build/web/**
+
     runs-on: ${{matrix.os}}
     steps:
       - name: Checkout
@@ -53,12 +62,6 @@ jobs:
           distribution: 'zulu'
           java-version: '11'
           cache: gradle
-      
-      - name: Decode keystore (Android)
-        if: matrix.target == 'android'
-        run: echo $ENCODED_KEYSTORE | base64 -di > android/app/keystore.jks
-        env:
-          ENCODED_KEYSTORE: ${{secrets.ENCODED_KEYSTORE}}
 
       - name: Install Flutter dependencies
         run: flutter pub get
@@ -72,7 +75,7 @@ jobs:
         shell: bash
         run: |
           echo "::set-output name=version::$(grep -m1 version: pubspec.yaml | awk '{print $2}' | sed 's/\"//g')"
-      
+
       - name: Build APKs (Android)
         if: matrix.target == 'android'
         run: flutter build apk --release
@@ -80,25 +83,25 @@ jobs:
           KEYSTORE_PASSWORD: ${{secrets.KEYSTORE_PASSWORD}}
           KEY_ALIAS: ${{secrets.KEY_ALIAS}}
           KEY_PASSWORD: ${{secrets.KEY_PASSWORD}}
-      
+
       - name: Build release (iOS)
         if: matrix.target == 'ios'
         run: flutter build ios --release --no-codesign
 
-      - name: Build ipa (iOS)
-        if: matrix.target == 'ios'
-        run: |
-          mkdir -p build/ios/ipa/Payload
-          cd build/ios/ipa/
-          mv ../iphoneos/Runner.app Payload
-          zip -9 ${APP_PACK_NAME}-${{steps.get_version.outputs.version}}.ipa -r Payload
-      
+      - name: Build exe (Windows)
+        if: matrix.target == 'windows'
+        run: flutter build windows
+
+      - name: Build web (Web)
+        if: matrix.target == 'web'
+        run: flutter build web
+
       - name: Publish artifacts
         uses: actions/upload-artifact@v3
         with:
           name: ${{matrix.artifact_name}}
           path: ${{matrix.artifact_path}}
-  
+
   publish_release:
     if: startsWith(github.ref, 'refs/tags/')
     name: Publish release
@@ -109,9 +112,9 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-        
+
       - run: mkdir /tmp/artifacts
-      
+
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
@@ -122,14 +125,21 @@ jobs:
         shell: bash
         run: |
           echo "::set-output name=version::$(grep -m1 version: pubspec.yaml | awk '{print $2}' | sed 's/\"//g')"
-      
+
       - name: Publish release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "/tmp/artifacts/release-apk/*.apk,/tmp/artifacts/release-ios/*.ipa"
+          artifacts: "/tmp/artifacts/release-apk/*.apk,/tmp/artifacts/release-ios/*.ipa,/tmp/artifacts/release-windows/*.exe,/tmp/artifacts/release-web/**"
           tag: ${{github.ref_name}}
           bodyFile: changelogs/v${{steps.get_version.outputs.version}}.md
           prerelease: contains(github.ref, 'pre')
           allowUpdates: true
           artifactErrorsFailBuild: true
           replacesArtifacts: true
+
+      - name: Deploy to GitHub Pages (Web)
+        if: matrix.target == 'web'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: build/web
